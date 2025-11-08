@@ -1,0 +1,13 @@
+{
+  "product_id": 7,
+  "features": [
+    {
+      "feature_idx": 0,
+      "feature_state": 1
+    },
+    {
+      "feature_idx": 1,
+      "feature_state": 1
+    }
+  ]
+}
