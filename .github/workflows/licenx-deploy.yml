@@ -8,7 +8,6 @@ on:
         type: choice
         options:
           - dev
-          - test
           - prod
         default: dev
         required: true
@@ -31,6 +30,9 @@ jobs:
   terraform:
     name: Deploy LicenX (${{ inputs.stage }})
     runs-on: ubuntu-latest
+    outputs:
+      checkout_ref: ${{ steps.resolve_release.outputs.checkout_ref }}
+      release_tag: ${{ steps.resolve_release.outputs.release_tag }}
     env:
       LICENX_SUBMODULE_PATH: ergox/licenx
       LICENX_IMAGE_REPOSITORY_NAME: licenxsrv
@@ -165,11 +167,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $stage = $Env:STAGE
-          $appNames = @{ dev = 'licenx-dev'; test = 'licenx-test'; prod = 'licenx-prod' }
-          if (-not $appNames.ContainsKey($stage)) {
+          if ($stage -notin @('dev', 'prod')) {
             throw "Unsupported stage '$stage'."
           }
-          $containerAppName = $appNames[$stage]
+          $containerAppName = 'licenx-prod'
           $endpoint = $Env:ACR_ENDPOINT
           if ([string]::IsNullOrWhiteSpace($endpoint)) {
             throw 'ERGOX_ACR_ENDPOINT secret is required.'
@@ -241,3 +242,60 @@ jobs:
         if: ${{ inputs.apply == 'true' }}
         working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
         run: terraform apply -input=false -auto-approve tfplan
+
+  validate-dev:
+    name: Validate Dev Simulation
+    runs-on: windows-latest
+    needs: terraform
+    if: ${{ needs.terraform.result == 'success' && inputs.stage == 'dev' && inputs.apply == 'true' }}
+    env:
+      ERGOX_LICENX_DEV_OVERRIDE: licenx.dev.override.confirmed
+    steps:
+      - name: Checkout LicenX source
+        uses: actions/checkout@v4
+        with:
+          repository: ergosumx/licenx
+          ref: ${{ needs.terraform.outputs.checkout_ref }}
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.ERGOX_SUBMODULE_TOKEN }}
+
+      - name: Restore simulation leases
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $resultsPath = Join-Path $PWD 'simulation_tests/results'
+          if (Test-Path $resultsPath) {
+            Get-ChildItem -Path $resultsPath -File -ErrorAction SilentlyContinue | Remove-Item -Force
+            Get-ChildItem -Path $resultsPath -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+          }
+          Get-ChildItem -Path "simulation_tests/apps" -Directory | ForEach-Object {
+            Get-ChildItem -Path $_.FullName -Filter '*.licenx.leased' -File -ErrorAction SilentlyContinue | Remove-Item -Force
+          }
+
+      - name: Run simulation validation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = Join-Path $PWD 'simulation_tests/scripts/run-all.ps1'
+          & $script -EnableDevOverride -ResetLeases -Cycles 3
+
+      - name: Check simulation results
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $summaryPath = Join-Path $PWD 'simulation_tests/results/summary.json'
+          if (-not (Test-Path $summaryPath)) {
+            throw "Missing simulation summary: $summaryPath"
+          }
+          $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
+          if (-not $summary) {
+            throw 'Simulation summary is empty.'
+          }
+          $failed = @($summary | Where-Object { $_.failures -gt 0 })
+          if ($failed.Count -gt 0) {
+            Write-Host 'Simulation failures detected:'
+            $failed | ConvertTo-Json -Depth 4
+            throw "Simulation validation failed for $($failed.Count) scenarios."
+          }
+          Write-Host 'Simulation validation succeeded.'
