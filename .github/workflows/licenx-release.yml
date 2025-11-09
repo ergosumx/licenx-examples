@@ -147,6 +147,10 @@ jobs:
           $productVersion = "{0}.{1}.{2}.{3}" -f $major, $minor, $patch, $build
           $fileVersion = "{0},{1},{2},{3}" -f $major, $minor, $patch, $build
           $hasTag = 'true'
+          $dockerWithBuild = $dockerSafe
+          if (-not [string]::IsNullOrWhiteSpace($dockerWithBuild) -and -not [string]::IsNullOrWhiteSpace($build)) {
+            $dockerWithBuild = "$dockerWithBuild.$build"
+          }
 
           @(
             "LICENX_VERSION_INPUT=$candidate"
@@ -161,6 +165,7 @@ jobs:
             "LICENX_VERSION_FILE_VERSION=$fileVersion"
             "LICENX_VERSION_HAS_TAG=$hasTag"
             "LICENX_VERSION_DOCKER_TAG=$dockerSafe"
+            "LICENX_VERSION_DOCKER_TAG_WITH_BUILD=$dockerWithBuild"
           ) | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
 
           Write-Host "Resolved LicenX version: $fileSafe (semver: $semver)"
@@ -234,6 +239,10 @@ jobs:
           $productVersion = "{0}.{1}.{2}.{3}" -f $major, $minor, $patch, $build
           $fileVersion = "{0},{1},{2},{3}" -f $major, $minor, $patch, $build
           $hasTag = if ([string]::IsNullOrWhiteSpace($tagInput)) { 'false' } else { 'true' }
+          $dockerWithBuild = $dockerSafe
+          if (-not [string]::IsNullOrWhiteSpace($dockerWithBuild) -and -not [string]::IsNullOrWhiteSpace($build)) {
+            $dockerWithBuild = "$dockerWithBuild.$build"
+          }
 
           @(
             "LICENX_VERSION_INPUT=$candidate"
@@ -248,6 +257,7 @@ jobs:
             "LICENX_VERSION_FILE_VERSION=$fileVersion"
             "LICENX_VERSION_HAS_TAG=$hasTag"
             "LICENX_VERSION_DOCKER_TAG=$dockerSafe"
+            "LICENX_VERSION_DOCKER_TAG_WITH_BUILD=$dockerWithBuild"
           ) | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
 
           Write-Host "Resolved LicenX version: $fileSafe (semver: $semver)"
@@ -321,6 +331,10 @@ jobs:
           $productVersion = "{0}.{1}.{2}.{3}" -f $major, $minor, $patch, $build
           $fileVersion = "{0},{1},{2},{3}" -f $major, $minor, $patch, $build
           $hasTag = 'true'
+          $dockerWithBuild = $dockerSafe
+          if (-not [string]::IsNullOrWhiteSpace($dockerWithBuild) -and -not [string]::IsNullOrWhiteSpace($build)) {
+            $dockerWithBuild = "$dockerWithBuild.$build"
+          }
 
           @(
             "LICENX_VERSION_INPUT=$candidate"
@@ -335,6 +349,7 @@ jobs:
             "LICENX_VERSION_FILE_VERSION=$fileVersion"
             "LICENX_VERSION_HAS_TAG=$hasTag"
             "LICENX_VERSION_DOCKER_TAG=$dockerSafe"
+            "LICENX_VERSION_DOCKER_TAG_WITH_BUILD=$dockerWithBuild"
           ) | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
 
           Write-Host "Resolved LicenX version: $fileSafe (semver: $semver)"
@@ -408,6 +423,10 @@ jobs:
           $productVersion = "{0}.{1}.{2}.{3}" -f $major, $minor, $patch, $build
           $fileVersion = "{0},{1},{2},{3}" -f $major, $minor, $patch, $build
           $hasTag = 'true'
+          $dockerWithBuild = $dockerSafe
+          if (-not [string]::IsNullOrWhiteSpace($dockerWithBuild) -and -not [string]::IsNullOrWhiteSpace($build)) {
+            $dockerWithBuild = "$dockerWithBuild.$build"
+          }
 
           @(
             "LICENX_VERSION_INPUT=$candidate"
@@ -422,6 +441,7 @@ jobs:
             "LICENX_VERSION_FILE_VERSION=$fileVersion"
             "LICENX_VERSION_HAS_TAG=$hasTag"
             "LICENX_VERSION_DOCKER_TAG=$dockerSafe"
+            "LICENX_VERSION_DOCKER_TAG_WITH_BUILD=$dockerWithBuild"
           ) | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
 
           Write-Host "Resolved LicenX version: $fileSafe (semver: $semver)"
@@ -715,6 +735,10 @@ jobs:
           $productVersion = "{0}.{1}.{2}.{3}" -f $major, $minor, $patch, $build
           $fileVersion = "{0},{1},{2},{3}" -f $major, $minor, $patch, $build
           $hasTag = 'true'
+          $dockerWithBuild = $dockerSafe
+          if (-not [string]::IsNullOrWhiteSpace($dockerWithBuild) -and -not [string]::IsNullOrWhiteSpace($build)) {
+            $dockerWithBuild = "$dockerWithBuild.$build"
+          }
 
           @(
             "LICENX_VERSION_INPUT=$candidate"
@@ -729,6 +753,7 @@ jobs:
             "LICENX_VERSION_FILE_VERSION=$fileVersion"
             "LICENX_VERSION_HAS_TAG=$hasTag"
             "LICENX_VERSION_DOCKER_TAG=$dockerSafe"
+            "LICENX_VERSION_DOCKER_TAG_WITH_BUILD=$dockerWithBuild"
           ) | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
 
           Write-Host "Resolved LicenX version: $fileSafe (semver: $semver)"
@@ -1335,24 +1360,41 @@ jobs:
 
           az acr login --name $Env:ACR_REGISTRY
 
+          $dockerTagBase = $Env:LICENX_VERSION_DOCKER_TAG
+          $dockerTagWithBuild = $Env:LICENX_VERSION_DOCKER_TAG_WITH_BUILD
           $imageTag = $Env:LICENX_VERSION_FILESAFE
-          if ([string]::IsNullOrWhiteSpace($imageTag)) {
+
+          if ([string]::IsNullOrWhiteSpace($dockerTagBase)) {
             $candidate = $Env:LICENX_TAG
             if (-not [string]::IsNullOrWhiteSpace($candidate)) {
               $candidate = $candidate.Trim()
               $candidate = $candidate -replace '[^0-9A-Za-z.+-]', '-'
               if (-not [string]::IsNullOrWhiteSpace($candidate)) {
-                $imageTag = $candidate.ToLowerInvariant()
-                Write-Host "Derived docker tag from LICENX_TAG input: $imageTag"
+                $dockerTagBase = $candidate.ToLowerInvariant()
+                Write-Host "Derived base docker tag from LICENX_TAG input: $dockerTagBase"
+              }
+            }
+          }
+
+          if ([string]::IsNullOrWhiteSpace($dockerTagWithBuild) -and -not [string]::IsNullOrWhiteSpace($dockerTagBase)) {
+            $buildSegment = $Env:LICENX_VERSION_BUILD
+            if (-not [string]::IsNullOrWhiteSpace($buildSegment)) {
+              $buildSegment = $buildSegment.Trim()
+              if ($buildSegment -match '^[0-9]+$') {
+                $dockerTagWithBuild = "$dockerTagBase.$buildSegment"
               }
             }
           }
 
           $tags = @()
-          if (-not [string]::IsNullOrWhiteSpace($imageTag) -and $imageTag -ne 'latest') {
-            $tags += $imageTag
+          foreach ($candidateTag in @($dockerTagWithBuild, $dockerTagBase, $imageTag)) {
+            if (-not [string]::IsNullOrWhiteSpace($candidateTag) -and $candidateTag -ne 'latest' -and ($tags -notcontains $candidateTag)) {
+              $tags += $candidateTag
+            }
           }
-          $tags += 'latest'
+          if ($tags -notcontains 'latest') {
+            $tags += 'latest'
+          }
 
           $primaryTag = "$acrLoginServer/${acrImageName}:$($tags[0])"
           Write-Host "Building image with primary tag: $primaryTag"
