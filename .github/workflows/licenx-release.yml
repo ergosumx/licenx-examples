@@ -82,6 +82,7 @@ jobs:
         shell: pwsh
         env:
           INPUT_TAG: ${{ env.LICENX_TAG }}
+          BUILD_RUN_ID: ${{ github.run_id }}
         run: |
           $ErrorActionPreference = 'Stop'
           $tagInput = $Env:INPUT_TAG
@@ -130,6 +131,17 @@ jobs:
           $minor = $intSegments[1]
           $patch = $intSegments[2]
           $build = $intSegments[3]
+
+          $runId = $Env:BUILD_RUN_ID
+          if (-not [string]::IsNullOrWhiteSpace($runId)) {
+            $runId = $runId.Trim()
+            if ($runId -match '^[0-9]+$') {
+              $build = $runId
+            }
+            else {
+              Write-Host "::warning::Workflow run id '$runId' is not numeric; continuing with parsed build segment $build."
+            }
+          }
 
           $semver = "{0}.{1}.{2}" -f $major, $minor, $patch
           $productVersion = "{0}.{1}.{2}.{3}" -f $major, $minor, $patch, $build
@@ -157,6 +169,7 @@ jobs:
         shell: pwsh
         env:
           INPUT_TAG: ${{ env.LICENX_TAG }}
+          BUILD_RUN_ID: ${{ github.run_id }}
         run: |
           $ErrorActionPreference = 'Stop'
           $tagInput = $Env:INPUT_TAG
@@ -205,6 +218,17 @@ jobs:
           $minor = $intSegments[1]
           $patch = $intSegments[2]
           $build = $intSegments[3]
+
+          $runId = $Env:BUILD_RUN_ID
+          if (-not [string]::IsNullOrWhiteSpace($runId)) {
+            $runId = $runId.Trim()
+            if ($runId -match '^[0-9]+$') {
+              $build = $runId
+            }
+            else {
+              Write-Host "::warning::Workflow run id '$runId' is not numeric; continuing with parsed build segment $build."
+            }
+          }
 
           $semver = "{0}.{1}.{2}" -f $major, $minor, $patch
           $productVersion = "{0}.{1}.{2}.{3}" -f $major, $minor, $patch, $build
@@ -232,6 +256,7 @@ jobs:
         shell: pwsh
         env:
           INPUT_TAG: ${{ env.LICENX_TAG }}
+          BUILD_RUN_ID: ${{ github.run_id }}
         run: |
           $ErrorActionPreference = 'Stop'
           $tagInput = $Env:INPUT_TAG
@@ -280,6 +305,17 @@ jobs:
           $minor = $intSegments[1]
           $patch = $intSegments[2]
           $build = $intSegments[3]
+
+          $runId = $Env:BUILD_RUN_ID
+          if (-not [string]::IsNullOrWhiteSpace($runId)) {
+            $runId = $runId.Trim()
+            if ($runId -match '^[0-9]+$') {
+              $build = $runId
+            }
+            else {
+              Write-Host "::warning::Workflow run id '$runId' is not numeric; continuing with parsed build segment $build."
+            }
+          }
 
           $semver = "{0}.{1}.{2}" -f $major, $minor, $patch
           $productVersion = "{0}.{1}.{2}.{3}" -f $major, $minor, $patch, $build
@@ -307,6 +343,7 @@ jobs:
         shell: pwsh
         env:
           INPUT_TAG: ${{ env.LICENX_TAG }}
+          BUILD_RUN_ID: ${{ github.run_id }}
         run: |
           $ErrorActionPreference = 'Stop'
           $tagInput = $Env:INPUT_TAG
@@ -355,6 +392,17 @@ jobs:
           $minor = $intSegments[1]
           $patch = $intSegments[2]
           $build = $intSegments[3]
+
+          $runId = $Env:BUILD_RUN_ID
+          if (-not [string]::IsNullOrWhiteSpace($runId)) {
+            $runId = $runId.Trim()
+            if ($runId -match '^[0-9]+$') {
+              $build = $runId
+            }
+            else {
+              Write-Host "::warning::Workflow run id '$runId' is not numeric; continuing with parsed build segment $build."
+            }
+          }
 
           $semver = "{0}.{1}.{2}" -f $major, $minor, $patch
           $productVersion = "{0}.{1}.{2}.{3}" -f $major, $minor, $patch, $build
@@ -597,6 +645,93 @@ jobs:
           fetch-depth: 0
           submodules: recursive
           token: ${{ secrets.ERGOX_SUBMODULE_TOKEN }}
+
+      - name: Prepare LicenX version metadata
+        shell: pwsh
+        env:
+          INPUT_TAG: ${{ env.LICENX_TAG }}
+          BUILD_RUN_ID: ${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tagInput = $Env:INPUT_TAG
+          if ([string]::IsNullOrWhiteSpace($tagInput)) {
+            throw 'LICENX_TAG must be provided for this workflow.'
+          }
+
+          $candidate = $tagInput.Trim()
+
+          $fileSafe = $candidate -replace '[^0-9A-Za-z.+-]', '-'
+          if ([string]::IsNullOrWhiteSpace($fileSafe)) {
+            $fileSafe = '0.0.0'
+          }
+
+          $dockerSafe = $fileSafe.ToLowerInvariant()
+
+          $numericSource = $fileSafe
+          if ($numericSource.StartsWith('v', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $numericSource = $numericSource.Substring(1)
+          }
+
+          $numericCore = $numericSource.Split('-', 2)[0]
+          if ([string]::IsNullOrWhiteSpace($numericCore)) {
+            $numericCore = '0.0.0'
+          }
+
+          $segments = $numericCore.Split('.', [System.StringSplitOptions]::RemoveEmptyEntries)
+          if ($segments.Count -eq 0) {
+            $segments = @('0','0','0')
+          }
+
+          $intSegments = @()
+          foreach ($segment in $segments) {
+            if ($segment -match '^[0-9]+$') {
+              $intSegments += [int]$segment
+            }
+            else {
+              $intSegments += 0
+            }
+          }
+          while ($intSegments.Count -lt 4) {
+            $intSegments += 0
+          }
+
+          $major = $intSegments[0]
+          $minor = $intSegments[1]
+          $patch = $intSegments[2]
+          $build = $intSegments[3]
+
+          $runId = $Env:BUILD_RUN_ID
+          if (-not [string]::IsNullOrWhiteSpace($runId)) {
+            $runId = $runId.Trim()
+            if ($runId -match '^[0-9]+$') {
+              $build = $runId
+            }
+            else {
+              Write-Host "::warning::Workflow run id '$runId' is not numeric; continuing with parsed build segment $build."
+            }
+          }
+
+          $semver = "{0}.{1}.{2}" -f $major, $minor, $patch
+          $productVersion = "{0}.{1}.{2}.{3}" -f $major, $minor, $patch, $build
+          $fileVersion = "{0},{1},{2},{3}" -f $major, $minor, $patch, $build
+          $hasTag = 'true'
+
+          @(
+            "LICENX_VERSION_INPUT=$candidate"
+            "LICENX_VERSION_FILESAFE=$fileSafe"
+            "LICENX_VERSION_STRING=$fileSafe"
+            "LICENX_VERSION_SEMVER=$semver"
+            "LICENX_VERSION_MAJOR=$major"
+            "LICENX_VERSION_MINOR=$minor"
+            "LICENX_VERSION_PATCH=$patch"
+            "LICENX_VERSION_BUILD=$build"
+            "LICENX_VERSION_PRODUCT_VERSION=$productVersion"
+            "LICENX_VERSION_FILE_VERSION=$fileVersion"
+            "LICENX_VERSION_HAS_TAG=$hasTag"
+            "LICENX_VERSION_DOCKER_TAG=$dockerSafe"
+          ) | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
+
+          Write-Host "Resolved LicenX version: $fileSafe (semver: $semver)"
 
       - name: Install build dependencies
         shell: bash
