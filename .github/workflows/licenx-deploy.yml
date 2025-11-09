@@ -171,7 +171,7 @@ jobs:
           if ($stage -notin @('dev', 'prod')) {
             throw "Unsupported stage '$stage'."
           }
-          $containerAppName = 'licenx-prod'
+          $containerAppName = if ($stage -eq 'prod') { 'licenx-prod' } else { 'licenx-dev' }
           $endpoint = $Env:ACR_ENDPOINT
           if ([string]::IsNullOrWhiteSpace($endpoint)) {
             throw 'ERGOX_ACR_ENDPOINT secret is required.'
