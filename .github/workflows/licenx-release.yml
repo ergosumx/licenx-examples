@@ -1307,6 +1307,18 @@ jobs:
 
           $imageTag = $Env:LICENX_VERSION_FILESAFE
           if ([string]::IsNullOrWhiteSpace($imageTag)) {
+            $candidate = $Env:LICENX_TAG
+            if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+              $candidate = $candidate.Trim()
+              $candidate = $candidate -replace '[^0-9A-Za-z.+-]', '-'
+              if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+                $imageTag = $candidate.ToLowerInvariant()
+                Write-Host "Derived docker tag from LICENX_TAG input: $imageTag"
+              }
+            }
+          }
+
+          if ([string]::IsNullOrWhiteSpace($imageTag)) {
             $imageTag = 'latest'
             Write-Host "LICENX_VERSION_FILESAFE not set; defaulting docker tag to: $imageTag"
           }
