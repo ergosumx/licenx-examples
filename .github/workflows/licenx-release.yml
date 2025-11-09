@@ -1911,5 +1911,4 @@ jobs:
             --source $container `
             --pattern "$prefixRoot/*" `
             --account-name $Env:AZURE_STORAGE_ACCOUNT `
-            --auth-mode login `
-            --yes | Out-Null
+            --auth-mode login | Out-Null
