@@ -39,6 +39,8 @@ env:
   ACR_REGISTRY: ergox
   ACR_LOGIN_SERVER: ergox-ehaeg0gpesc0gag6.azurecr.io
   ACR_IMAGE_NAME: licenxsrv
+  WORKFLOW_ARTIFACT_CONTAINER: licenx-workflow-staging
+  WORKFLOW_ARTIFACT_PREFIX: workflow-runs/${{ github.run_id }}
 
 jobs:
   build-linux:
@@ -630,12 +632,63 @@ jobs:
 
           "publish-dir=$publishDir" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+      - name: Azure login (artifact staging)
+        uses: azure/login@v2
         with:
-          name: licenx-linux
-          path: ${{ steps.package.outputs.publish-dir }}
-          if-no-files-found: error
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Stage packaged artifacts in Azure Storage
+        shell: pwsh
+        env:
+          PUBLISH_DIR: ${{ steps.package.outputs.publish-dir }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $publishDir = $Env:PUBLISH_DIR
+          if ([string]::IsNullOrWhiteSpace($publishDir) -or -not (Test-Path $publishDir)) {
+            throw "Publish directory $publishDir not found."
+          }
+
+          $container = if ([string]::IsNullOrWhiteSpace($Env:WORKFLOW_ARTIFACT_CONTAINER)) {
+            'licenx-workflow-staging'
+          }
+          else {
+            $Env:WORKFLOW_ARTIFACT_CONTAINER.Trim()
+          }
+
+          $prefixRoot = if ([string]::IsNullOrWhiteSpace($Env:WORKFLOW_ARTIFACT_PREFIX)) {
+            "workflow-runs/$($Env:GITHUB_RUN_ID)"
+          }
+          else {
+            $Env:WORKFLOW_ARTIFACT_PREFIX.Trim().TrimEnd('/')
+          }
+
+          $platform = if ([string]::IsNullOrWhiteSpace($Env:ARTIFACT_PLATFORM_SUFFIX)) {
+            'linux'
+          }
+          else {
+            $Env:ARTIFACT_PLATFORM_SUFFIX.Trim()
+          }
+
+          $destinationPath = "$prefixRoot/$platform"
+
+          az storage container create `
+            --name $container `
+            --account-name $Env:AZURE_STORAGE_ACCOUNT `
+            --auth-mode login `
+            --only-show-errors | Out-Null
+
+          az storage blob directory upload `
+            --container-name $container `
+            --source $publishDir `
+            --destination-path $destinationPath `
+            --account-name $Env:AZURE_STORAGE_ACCOUNT `
+            --auth-mode login `
+            --recursive `
+            --overwrite | Out-Null
+
+          Write-Host "Staged $publishDir to Azure storage path $container/$destinationPath"
 
   build-macos:
     name: Build + Test (macOS)
@@ -937,12 +990,63 @@ jobs:
 
           "publish-dir=$publishDir" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+      - name: Azure login (artifact staging)
+        uses: azure/login@v2
         with:
-          name: licenx-macos
-          path: ${{ steps.package.outputs.publish-dir }}
-          if-no-files-found: error
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Stage packaged artifacts in Azure Storage
+        shell: pwsh
+        env:
+          PUBLISH_DIR: ${{ steps.package.outputs.publish-dir }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $publishDir = $Env:PUBLISH_DIR
+          if ([string]::IsNullOrWhiteSpace($publishDir) -or -not (Test-Path $publishDir)) {
+            throw "Publish directory $publishDir not found."
+          }
+
+          $container = if ([string]::IsNullOrWhiteSpace($Env:WORKFLOW_ARTIFACT_CONTAINER)) {
+            'licenx-workflow-staging'
+          }
+          else {
+            $Env:WORKFLOW_ARTIFACT_CONTAINER.Trim()
+          }
+
+          $prefixRoot = if ([string]::IsNullOrWhiteSpace($Env:WORKFLOW_ARTIFACT_PREFIX)) {
+            "workflow-runs/$($Env:GITHUB_RUN_ID)"
+          }
+          else {
+            $Env:WORKFLOW_ARTIFACT_PREFIX.Trim().TrimEnd('/')
+          }
+
+          $platform = if ([string]::IsNullOrWhiteSpace($Env:ARTIFACT_PLATFORM_SUFFIX)) {
+            'macos'
+          }
+          else {
+            $Env:ARTIFACT_PLATFORM_SUFFIX.Trim()
+          }
+
+          $destinationPath = "$prefixRoot/$platform"
+
+          az storage container create `
+            --name $container `
+            --account-name $Env:AZURE_STORAGE_ACCOUNT `
+            --auth-mode login `
+            --only-show-errors | Out-Null
+
+          az storage blob directory upload `
+            --container-name $container `
+            --source $publishDir `
+            --destination-path $destinationPath `
+            --account-name $Env:AZURE_STORAGE_ACCOUNT `
+            --auth-mode login `
+            --recursive `
+            --overwrite | Out-Null
+
+          Write-Host "Staged $publishDir to Azure storage path $container/$destinationPath"
 
   build-windows:
     name: Build + Test (Windows)
@@ -1141,12 +1245,63 @@ jobs:
 
           "publish-dir=$publishDir" | Out-File -FilePath $Env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+      - name: Azure login (artifact staging)
+        uses: azure/login@v2
         with:
-          name: licenx-windows
-          path: ${{ steps.package.outputs.publish-dir }}
-          if-no-files-found: error
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Stage packaged artifacts in Azure Storage
+        shell: pwsh
+        env:
+          PUBLISH_DIR: ${{ steps.package.outputs.publish-dir }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $publishDir = $Env:PUBLISH_DIR
+          if ([string]::IsNullOrWhiteSpace($publishDir) -or -not (Test-Path $publishDir)) {
+            throw "Publish directory $publishDir not found."
+          }
+
+          $container = if ([string]::IsNullOrWhiteSpace($Env:WORKFLOW_ARTIFACT_CONTAINER)) {
+            'licenx-workflow-staging'
+          }
+          else {
+            $Env:WORKFLOW_ARTIFACT_CONTAINER.Trim()
+          }
+
+          $prefixRoot = if ([string]::IsNullOrWhiteSpace($Env:WORKFLOW_ARTIFACT_PREFIX)) {
+            "workflow-runs/$($Env:GITHUB_RUN_ID)"
+          }
+          else {
+            $Env:WORKFLOW_ARTIFACT_PREFIX.Trim().TrimEnd('/')
+          }
+
+          $platform = if ([string]::IsNullOrWhiteSpace($Env:ARTIFACT_PLATFORM_SUFFIX)) {
+            'windows'
+          }
+          else {
+            $Env:ARTIFACT_PLATFORM_SUFFIX.Trim()
+          }
+
+          $destinationPath = "$prefixRoot/$platform"
+
+          az storage container create `
+            --name $container `
+            --account-name $Env:AZURE_STORAGE_ACCOUNT `
+            --auth-mode login `
+            --only-show-errors | Out-Null
+
+          az storage blob directory upload `
+            --container-name $container `
+            --source $publishDir `
+            --destination-path $destinationPath `
+            --account-name $Env:AZURE_STORAGE_ACCOUNT `
+            --auth-mode login `
+            --recursive `
+            --overwrite | Out-Null
+
+          Write-Host "Staged $publishDir to Azure storage path $container/$destinationPath"
 
   publish-and-docker:
     name: Publish artifacts & Docker image
@@ -1345,30 +1500,61 @@ jobs:
           if ($multiConfig) { $args += @('--config', $Env:LICENX_BUILD_CONFIG) }
           cmake @args
 
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: licenx-windows
-          path: collected/windows/publish
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: licenx-linux
-          path: collected/linux/publish
-
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: licenx-macos
-          path: collected/macos/publish
-
       - name: Azure login
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Download staged artifacts from Azure Storage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $container = if ([string]::IsNullOrWhiteSpace($Env:WORKFLOW_ARTIFACT_CONTAINER)) {
+            'licenx-workflow-staging'
+          }
+          else {
+            $Env:WORKFLOW_ARTIFACT_CONTAINER.Trim()
+          }
+
+          $prefixRoot = if ([string]::IsNullOrWhiteSpace($Env:WORKFLOW_ARTIFACT_PREFIX)) {
+            "workflow-runs/$($Env:GITHUB_RUN_ID)"
+          }
+          else {
+            $Env:WORKFLOW_ARTIFACT_PREFIX.Trim().TrimEnd('/')
+          }
+
+          if ([string]::IsNullOrWhiteSpace($container)) {
+            throw 'WORKFLOW_ARTIFACT_CONTAINER must be set for Azure staging downloads.'
+          }
+
+          $destRoot = Join-Path $Env:GITHUB_WORKSPACE 'collected'
+          $platforms = @('windows','linux','macos')
+
+          foreach ($platform in $platforms) {
+            $destinationDir = Join-Path $destRoot $platform
+            $publishDir = Join-Path $destinationDir 'publish'
+            if (-not (Test-Path $publishDir)) {
+              New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
+            }
+            else {
+              Get-ChildItem -Path $publishDir -Force -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+            }
+
+            $sourcePath = "$prefixRoot/$platform"
+
+            Write-Host "Downloading staged artifacts from $container/$sourcePath to $publishDir"
+
+            az storage blob directory download `
+              --container-name $container `
+              --directory-path $sourcePath `
+              --destination $publishDir `
+              --account-name $Env:AZURE_STORAGE_ACCOUNT `
+              --auth-mode login `
+              --recursive | Out-Null
+          }
 
       - name: Publish packages to Azure Files
         shell: pwsh
@@ -1668,28 +1854,36 @@ jobs:
               print(f"Release available at {html_url}")
           PY
 
-      - name: Delete workflow artifacts
+      - name: Cleanup Azure staging artifacts
         if: ${{ always() }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
         run: |
-          set -euo pipefail
-          names=("licenx-linux" "licenx-macos" "licenx-windows")
-          for name in "${names[@]}"; do
-            ids=$(gh api \
-              -H "Accept: application/vnd.github+json" \
-              repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts \
-              --paginate \
-              --jq ".artifacts[] | select(.name==\"$name\") | .id")
-            if [[ -z "${ids}" ]]; then
-              continue
-            fi
-            for id in ${ids}; do
-              gh api \
-                -H "Accept: application/vnd.github+json" \
-                repos/${{ github.repository }}/actions/artifacts/${id} \
-                -X DELETE \
-                >/dev/null
-            done
-          done
+          $ErrorActionPreference = 'Stop'
+
+          $container = if ([string]::IsNullOrWhiteSpace($Env:WORKFLOW_ARTIFACT_CONTAINER)) {
+            'licenx-workflow-staging'
+          }
+          else {
+            $Env:WORKFLOW_ARTIFACT_CONTAINER.Trim()
+          }
+
+          $prefixRoot = if ([string]::IsNullOrWhiteSpace($Env:WORKFLOW_ARTIFACT_PREFIX)) {
+            "workflow-runs/$($Env:GITHUB_RUN_ID)"
+          }
+          else {
+            $Env:WORKFLOW_ARTIFACT_PREFIX.Trim().TrimEnd('/')
+          }
+
+          if ([string]::IsNullOrWhiteSpace($container)) {
+            Write-Host 'No staging container configured; skipping cleanup.'
+            return
+          }
+
+          Write-Host "Cleaning up staged artifacts from $container/$prefixRoot"
+
+          az storage blob delete-batch `
+            --source $container `
+            --pattern "$prefixRoot/*" `
+            --account-name $Env:AZURE_STORAGE_ACCOUNT `
+            --auth-mode login `
+            --yes | Out-Null
