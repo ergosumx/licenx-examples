@@ -6,10 +6,6 @@ on:
       licenx-tag:
         description: Release tag (vX.Y.Z). Required for checkout and artifact versioning.
         required: true
-      dockerfile-relative-path:
-        description: Optional Dockerfile path relative to licenx submodule
-        default: docker/Dockerfile
-        required: false
 
 permissions:
   actions: write
@@ -1617,19 +1613,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $dockerfileInput = "${{ github.event.inputs.dockerfile-relative-path }}"
-          if ([string]::IsNullOrWhiteSpace($dockerfileInput)) {
-            $dockerfileInput = 'docker/Dockerfile'
-            Write-Host "::notice::dockerfile-relative-path input not provided; defaulting to $dockerfileInput"
-          }
-
-          $dockerfileInput = $dockerfileInput.Trim()
-
-          # Construct path relative to the licenx submodule
-          $dockerfile = Join-Path $Env:GITHUB_WORKSPACE $Env:LICENX_SUBMODULE_PATH $dockerfileInput
+          $dockerfileRelativePath = 'docker/Dockerfile'
+          $dockerfile = Join-Path $Env:GITHUB_WORKSPACE $Env:LICENX_SUBMODULE_PATH $dockerfileRelativePath
 
           if (-not (Test-Path $dockerfile)) {
-            Write-Host "::warning::Dockerfile not found at $dockerfile. Checked: $Env:LICENX_SUBMODULE_PATH/$dockerfileInput"
+            Write-Host "::warning::Dockerfile not found at $dockerfile. Checked: $Env:LICENX_SUBMODULE_PATH/$dockerfileRelativePath"
             return
           }
 
