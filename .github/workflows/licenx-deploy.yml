@@ -1,0 +1,243 @@
+name: licenx-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Target LicenX stage
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+        default: dev
+        required: true
+      licenx-release-tag:
+        description: Optional LicenX release tag (vX.Y.Z). When empty the latest published release is used.
+        required: false
+      container-image-tag:
+        description: Optional container image tag override. Defaults to the sanitized release tag.
+        required: false
+      apply:
+        description: Apply Terraform changes (unchecked = plan only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  terraform:
+    name: Deploy LicenX (${{ inputs.stage }})
+    runs-on: ubuntu-latest
+    env:
+      LICENX_SUBMODULE_PATH: ergox/licenx
+      LICENX_IMAGE_REPOSITORY_NAME: licenxsrv
+      TERRAFORM_STATE_ACCOUNT: ergoxbuild
+      TERRAFORM_STATE_CONTAINER: terraform
+      TF_IN_AUTOMATION: true
+      TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_resource_group_name: ${{ secrets.ERGOX_RG_NAME }}
+      TF_VAR_location: westeurope
+      TF_VAR_managed_environment_name: ergox
+      TF_VAR_container_registry_name: ${{ secrets.ERGOX_ACR_NAME }}
+      TF_VAR_stage: ${{ inputs.stage }}
+      TF_VAR_key_vault_name: ${{ secrets.ERGOX_KV_NAME }}
+      TF_VAR_cloudflare_zone_name: ergosum.in
+      TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ERGOSUM_IN_ZONE_ID }}
+      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: true
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Prepare LicenX workspace
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $moduleDir = Join-Path $Env:GITHUB_WORKSPACE '.git/modules' $Env:LICENX_SUBMODULE_PATH
+          if (Test-Path $moduleDir) {
+            Remove-Item $moduleDir -Recurse -Force
+          }
+          $submodulePath = Join-Path $Env:GITHUB_WORKSPACE $Env:LICENX_SUBMODULE_PATH
+          if (Test-Path $submodulePath) {
+            Remove-Item $submodulePath -Recurse -Force
+          }
+
+      - name: Resolve LicenX release metadata
+        id: resolve_release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = 'ergosumx';
+            const repo = 'licenx';
+            const inputs = context.payload.inputs ?? {};
+            const releaseTagInput = (inputs['licenx-release-tag'] || '').trim();
+            const overrideImageTag = (inputs['container-image-tag'] || '').trim();
+
+            let releaseTag = releaseTagInput;
+            let checkoutRef = releaseTagInput;
+            let releaseUrl = '';
+
+            if (releaseTag) {
+              try {
+                const release = await github.rest.repos.getReleaseByTag({ owner, repo, tag: releaseTag });
+                releaseTag = release.data.tag_name || releaseTag;
+                checkoutRef = release.data.tag_name || release.data.target_commitish || releaseTag;
+                releaseUrl = release.data.html_url || '';
+              } catch (error) {
+                if (error.status === 404) {
+                  await github.rest.git.getRef({ owner, repo, ref: `tags/${releaseTag}` });
+                  checkoutRef = releaseTag;
+                } else {
+                  throw error;
+                }
+              }
+            } else {
+              const latest = await github.rest.repos.getLatestRelease({ owner, repo });
+              releaseTag = latest.data.tag_name;
+              checkoutRef = latest.data.tag_name || latest.data.target_commitish;
+              releaseUrl = latest.data.html_url || '';
+            }
+
+            if (!checkoutRef) {
+              throw new Error('Failed to resolve a git ref for LicenX checkout.');
+            }
+
+            const sanitize = (value) => {
+              if (!value) return '';
+              const trimmed = value.trim();
+              if (!trimmed) return '';
+              const replaced = trimmed.replace(/[^0-9A-Za-z.+-]/g, '-');
+              return replaced ? replaced.toLowerCase() : '';
+            };
+
+            const dockerTagCandidate = sanitize(releaseTag) || 'latest';
+            const dockerTag = sanitize(overrideImageTag) || dockerTagCandidate;
+
+            core.setOutput('release_tag', releaseTag);
+            core.setOutput('checkout_ref', checkoutRef);
+            core.setOutput('release_url', releaseUrl);
+            core.setOutput('docker_tag', dockerTag);
+            core.setOutput('docker_tag_candidate', dockerTagCandidate);
+
+      - name: Export release environment
+        shell: pwsh
+        env:
+          RESOLVED_RELEASE_TAG: ${{ steps.resolve_release.outputs.release_tag }}
+          RESOLVED_RELEASE_URL: ${{ steps.resolve_release.outputs.release_url }}
+          RESOLVED_DOCKER_TAG: ${{ steps.resolve_release.outputs.docker_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($Env:RESOLVED_RELEASE_TAG)) {
+            throw 'Release tag resolution failed.'
+          }
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "LICENX_RELEASE_TAG=$($Env:RESOLVED_RELEASE_TAG)"
+          if (-not [string]::IsNullOrWhiteSpace($Env:RESOLVED_RELEASE_URL)) {
+            Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "LICENX_RELEASE_URL=$($Env:RESOLVED_RELEASE_URL)"
+          }
+          $dockerTag = if ([string]::IsNullOrWhiteSpace($Env:RESOLVED_DOCKER_TAG)) { 'latest' } else { $Env:RESOLVED_DOCKER_TAG }
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_container_image_tag=$dockerTag"
+
+      - name: Checkout LicenX source
+        uses: actions/checkout@v4
+        with:
+          repository: ergosumx/licenx
+          ref: ${{ steps.resolve_release.outputs.checkout_ref }}
+          path: ${{ env.LICENX_SUBMODULE_PATH }}
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.ERGOX_SUBMODULE_TOKEN }}
+
+      - name: Configure stage settings
+        shell: pwsh
+        env:
+          STAGE: ${{ inputs.stage }}
+          ACR_ENDPOINT: ${{ secrets.ERGOX_ACR_ENDPOINT }}
+          IMAGE_NAME: ${{ env.LICENX_IMAGE_REPOSITORY_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = $Env:STAGE
+          $appNames = @{ dev = 'licenx-dev'; test = 'licenx-test'; prod = 'licenx-prod' }
+          if (-not $appNames.ContainsKey($stage)) {
+            throw "Unsupported stage '$stage'."
+          }
+          $containerAppName = $appNames[$stage]
+          $endpoint = $Env:ACR_ENDPOINT
+          if ([string]::IsNullOrWhiteSpace($endpoint)) {
+            throw 'ERGOX_ACR_ENDPOINT secret is required.'
+          }
+          $endpoint = $endpoint.Trim()
+          if ($endpoint.StartsWith('https://')) {
+            $endpoint = $endpoint.Substring(8)
+          }
+          if ($endpoint.StartsWith('http://')) {
+            $endpoint = $endpoint.Substring(7)
+          }
+          $endpoint = $endpoint.TrimEnd('/')
+          $imageName = if ([string]::IsNullOrWhiteSpace($Env:IMAGE_NAME)) { 'licenxsrv' } else { $Env:IMAGE_NAME.Trim() }
+          $containerImage = "$endpoint/$imageName"
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_container_app_name=$containerAppName"
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_container_image=$containerImage"
+
+      - name: Summarize deployment inputs
+        shell: pwsh
+        run: |
+          Write-Host "Stage            : $Env:TF_VAR_stage"
+          Write-Host "Release tag      : $Env:LICENX_RELEASE_TAG"
+          if ($Env:LICENX_RELEASE_URL) {
+            Write-Host "Release URL      : $Env:LICENX_RELEASE_URL"
+          }
+          Write-Host "Container app    : $Env:TF_VAR_container_app_name"
+          Write-Host "Image repository : $Env:TF_VAR_container_image"
+          Write-Host "Image tag        : $Env:TF_VAR_container_image_tag"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform init
+        working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.ERGOX_RG_NAME }}" \
+            -backend-config="storage_account_name=${{ env.TERRAFORM_STATE_ACCOUNT }}" \
+            -backend-config="container_name=${{ env.TERRAFORM_STATE_CONTAINER }}" \
+            -backend-config="key=${{ inputs.stage }}/licenx/terraform.tfstate"
+
+      - name: Terraform plan
+        id: terraform_plan
+        working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Show Terraform plan
+        working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
+        run: terraform show -no-color tfplan
+
+      - name: Upload Terraform plan
+        if: ${{ inputs.apply != 'true' && success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: licenx-tfplan-${{ inputs.stage }}
+          path: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy/tfplan
+          if-no-files-found: warn
+
+      - name: Terraform apply
+        if: ${{ inputs.apply == 'true' }}
+        working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
+        run: terraform apply -input=false -auto-approve tfplan

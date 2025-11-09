@@ -3,15 +3,6 @@ name: licenx-release
 on:
   workflow_dispatch:
     inputs:
-      licenx-environment:
-        description: CMake environment passed to the LicenX generator
-        type: choice
-        options:
-          - dev
-          - test
-          - prod
-        default: dev
-        required: true
       licenx-tag:
         description: Release tag (vX.Y.Z). Required for checkout and artifact versioning.
         required: true
@@ -32,7 +23,7 @@ env:
   LICENX_BUILD_DIR: ergox/licenx/build
   LICENX_BUILD_CONFIG: Release
   LICENX_ARTIFACT_ROOT: ergox/licenx/artifacts
-  LICENX_ENVIRONMENT_INPUT: ${{ github.event.inputs.licenx-environment || 'dev' }}
+  LICENX_ENVIRONMENT_INPUT: prod
   LICENX_TAG: ${{ github.event.inputs.licenx-tag }}
   AZURE_STORAGE_ACCOUNT: ergoxbuild
   AZURE_STORAGE_PATH: licenx
@@ -1591,12 +1582,7 @@ jobs:
             throw "Collected artifacts directory $source not found."
           }
 
-          $containerName = if ([string]::IsNullOrWhiteSpace($Env:LICENX_ENVIRONMENT_INPUT)) {
-            'dev'
-          }
-          else {
-            $Env:LICENX_ENVIRONMENT_INPUT
-          }
+          $containerName = 'build-artifacts'
 
           $targets = @(
             @{ Folder = 'windows'; Destination = "$($Env:AZURE_STORAGE_PATH)/windows-x64" },
