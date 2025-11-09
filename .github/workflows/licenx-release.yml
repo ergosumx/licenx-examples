@@ -679,14 +679,15 @@ jobs:
             --auth-mode login `
             --only-show-errors | Out-Null
 
-          az storage blob directory upload `
-            --container-name $container `
+          az storage blob upload-batch `
+            --destination $container `
             --source $publishDir `
             --destination-path $destinationPath `
             --account-name $Env:AZURE_STORAGE_ACCOUNT `
             --auth-mode login `
-            --recursive `
-            --overwrite | Out-Null
+            --pattern '*' `
+            --overwrite `
+            --no-progress | Out-Null
 
           Write-Host "Staged $publishDir to Azure storage path $container/$destinationPath"
 
@@ -1037,14 +1038,15 @@ jobs:
             --auth-mode login `
             --only-show-errors | Out-Null
 
-          az storage blob directory upload `
-            --container-name $container `
+          az storage blob upload-batch `
+            --destination $container `
             --source $publishDir `
             --destination-path $destinationPath `
             --account-name $Env:AZURE_STORAGE_ACCOUNT `
             --auth-mode login `
-            --recursive `
-            --overwrite | Out-Null
+            --pattern '*' `
+            --overwrite `
+            --no-progress | Out-Null
 
           Write-Host "Staged $publishDir to Azure storage path $container/$destinationPath"
 
@@ -1292,14 +1294,15 @@ jobs:
             --auth-mode login `
             --only-show-errors | Out-Null
 
-          az storage blob directory upload `
-            --container-name $container `
+          az storage blob upload-batch `
+            --destination $container `
             --source $publishDir `
             --destination-path $destinationPath `
             --account-name $Env:AZURE_STORAGE_ACCOUNT `
             --auth-mode login `
-            --recursive `
-            --overwrite | Out-Null
+            --pattern '*' `
+            --overwrite `
+            --no-progress | Out-Null
 
           Write-Host "Staged $publishDir to Azure storage path $container/$destinationPath"
 
@@ -1547,13 +1550,36 @@ jobs:
 
             Write-Host "Downloading staged artifacts from $container/$sourcePath to $publishDir"
 
-            az storage blob directory download `
-              --container-name $container `
-              --directory-path $sourcePath `
-              --destination $publishDir `
+            $tempDir = Join-Path $Env:RUNNER_TEMP ([System.Guid]::NewGuid().ToString())
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+            $pattern = "$sourcePath/*"
+
+            az storage blob download-batch `
+              --source $container `
+              --destination $tempDir `
               --account-name $Env:AZURE_STORAGE_ACCOUNT `
               --auth-mode login `
-              --recursive | Out-Null
+              --pattern $pattern `
+              --no-progress | Out-Null
+
+            $downloadRoot = Join-Path $tempDir $sourcePath
+            if (-not (Test-Path $downloadRoot)) {
+              Write-Host "::warning::No staged artifacts found at $container/$sourcePath"
+              continue
+            }
+
+            Get-ChildItem -Path $downloadRoot -Force -ErrorAction SilentlyContinue | ForEach-Object {
+              $target = Join-Path $publishDir $_.Name
+              if ($_.PSIsContainer) {
+                Copy-Item -Path $_.FullName -Destination $target -Recurse -Force
+              }
+              else {
+                Copy-Item -Path $_.FullName -Destination $publishDir -Force
+              }
+            }
+
+            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
           }
 
       - name: Publish packages to Azure Files
