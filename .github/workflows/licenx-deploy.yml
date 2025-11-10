@@ -114,8 +114,6 @@ jobs:
     name: Deploy Dev
     runs-on: ubuntu-latest
     needs: prepare
-    environment:
-      name: dev-terraform
     env:
       DEPLOY_STAGE: dev
     steps: &deploy_stage_steps
@@ -470,8 +468,6 @@ jobs:
       - deploy_dev
       - validate_simulation
     if: ${{ needs.deploy_dev.result == 'success' && needs.validate_simulation.result == 'success' && inputs.apply && inputs.dev_only == false }}
-    environment:
-      name: prod-terraform
     env:
       DEPLOY_STAGE: prod
     steps: *deploy_stage_steps
