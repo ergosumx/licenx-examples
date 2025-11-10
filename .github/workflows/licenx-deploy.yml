@@ -7,10 +7,7 @@ on:
         description: Run only the dev deployment stage
         type: boolean
         default: true
-      promote_prod:
-        description: Promote to prod after successful validation
-        type: boolean
-        default: false
+      # promote_prod removed: promotion to prod is controlled by the 'apply' checkbox only
       licenx_release_tag:
         description: Optional LicenX release tag (vX.Y.Z). When empty the latest published release is used.
         required: false
@@ -117,6 +114,8 @@ jobs:
     name: Deploy Dev
     runs-on: ubuntu-latest
     needs: prepare
+    environment:
+      name: dev-terraform
     env:
       DEPLOY_STAGE: dev
     steps: &deploy_stage_steps
@@ -252,7 +251,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Terraform apply
-        if: ${{ inputs.apply }}
+        if: ${{ inputs.apply || (env.DEPLOY_STAGE == 'dev') }}
         working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
         run: terraform apply -input=false -auto-approve
 
@@ -262,7 +261,7 @@ jobs:
     needs:
       - deploy_dev
       - prepare
-    if: ${{ needs.deploy_dev.result == 'success' && inputs.apply }}
+    if: ${{ needs.deploy_dev.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -470,7 +469,9 @@ jobs:
       - prepare
       - deploy_dev
       - validate_simulation
-    if: ${{ needs.deploy_dev.result == 'success' && needs.validate_simulation.result == 'success' && inputs.apply && inputs.dev_only == false && inputs.promote_prod }}
+    if: ${{ needs.deploy_dev.result == 'success' && needs.validate_simulation.result == 'success' && inputs.apply && inputs.dev_only == false }}
+    environment:
+      name: prod-terraform
     env:
       DEPLOY_STAGE: prod
     steps: *deploy_stage_steps
