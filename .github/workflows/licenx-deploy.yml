@@ -258,12 +258,16 @@ jobs:
         run: terraform apply -input=false -auto-approve
 
   validate_simulation:
-    name: Validate Simulation Tests
-    runs-on: windows-latest
+    name: "Validate Simulation Tests (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
     needs:
       - deploy_dev
       - prepare
     if: ${{ needs.deploy_dev.result == 'success' && inputs.apply }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
     env:
       ERGOX_LICENX_DEV_OVERRIDE: licenx.dev.override.confirmed
       LICENX_KEY_VAULT_NAME: ${{ secrets.ERGOX_KV_NAME }}
@@ -440,7 +444,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: simulation-results
+          name: simulation-results-${{ matrix.os }}
           path: simulation_tests/results
           if-no-files-found: warn
 
