@@ -465,7 +465,7 @@ jobs:
       - prepare
       - deploy_dev
       - validate_simulation
-    if: ${{ needs.deploy_dev.result == 'success' && needs.validate_simulation.result == 'success' && inputs.dev_only == false }}
+    if: ${{ needs.deploy_dev.result == 'success' && needs.validate_simulation.result == 'success' }}
     env:
       DEPLOY_STAGE: prod
     steps:
@@ -593,7 +593,7 @@ jobs:
         run: terraform show -no-color tfplan
 
       - name: Upload Terraform plan
-        if: ${{ !inputs.apply && success() }}
+        if: ${{ success() }}
         uses: actions/upload-artifact@v4
         with:
           name: licenx-tfplan-${{ env.DEPLOY_STAGE }}
@@ -606,7 +606,7 @@ jobs:
     needs:
       - prepare
       - plan_prod
-    if: ${{ needs.plan_prod.result == 'success' && inputs.apply }}
+    if: ${{ needs.plan_prod.result == 'success' && inputs.apply && inputs.dev_only == false }}
     env:
       DEPLOY_STAGE: prod
     steps:
