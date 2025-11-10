@@ -232,7 +232,7 @@ jobs:
         run: terraform show -no-color tfplan
 
       - name: Upload Terraform plan
-        if: ${{ inputs.apply != 'true' && success() }}
+        if: ${{ !inputs.apply && success() }}
         uses: actions/upload-artifact@v4
         with:
           name: licenx-tfplan-${{ inputs.stage }}
@@ -240,7 +240,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Terraform apply
-        if: ${{ inputs.apply == 'true' }}
+        if: ${{ inputs.apply }}
         working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
         run: terraform apply -input=false -auto-approve tfplan
 
@@ -248,7 +248,7 @@ jobs:
     name: Validate Dev Simulation
     runs-on: windows-latest
     needs: terraform
-    if: ${{ needs.terraform.result == 'success' && inputs.stage == 'dev' && inputs.apply == 'true' }}
+    if: ${{ needs.terraform.result == 'success' && inputs.stage == 'dev' && inputs.apply }}
     env:
       ERGOX_LICENX_DEV_OVERRIDE: licenx.dev.override.confirmed
     steps:
