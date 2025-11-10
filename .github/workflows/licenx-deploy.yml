@@ -606,7 +606,7 @@ jobs:
     needs:
       - prepare
       - plan_prod
-    if: ${{ needs.plan_prod.result == 'success' && inputs.apply && inputs.dev_only == false }}
+    if: ${{ needs.plan_prod.result == 'success' && inputs.apply }}
     env:
       DEPLOY_STAGE: prod
     steps:
