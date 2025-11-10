@@ -3,18 +3,18 @@ name: licenx-deploy
 on:
   workflow_dispatch:
     inputs:
-      stage:
-        description: Target LicenX stage
-        type: choice
-        options:
-          - dev
-          - prod
-        default: dev
-        required: true
-      licenx-release-tag:
+      dev_only:
+        description: Run only the dev deployment stage
+        type: boolean
+        default: true
+      promote_prod:
+        description: Promote to prod after successful validation
+        type: boolean
+        default: false
+      licenx_release_tag:
         description: Optional LicenX release tag (vX.Y.Z). When empty the latest published release is used.
         required: false
-      container-image-tag:
+      container_image_tag:
         description: Optional container image tag override. Defaults to the sanitized release tag.
         required: false
       apply:
@@ -26,53 +26,36 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  LICENX_SUBMODULE_PATH: ergox/licenx
+  LICENX_IMAGE_REPOSITORY_NAME: licenxsrv
+  TERRAFORM_STATE_ACCOUNT: ergoxbuild
+  TERRAFORM_STATE_CONTAINER: terraform
+  TF_IN_AUTOMATION: true
+  TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  TF_VAR_resource_group_name: ${{ secrets.ERGOX_RG_NAME }}
+  TF_VAR_location: westeurope
+  TF_VAR_managed_environment_name: ergox
+  TF_VAR_container_registry_name: ${{ secrets.ERGOX_ACR_NAME }}
+  TF_VAR_key_vault_name: ${{ secrets.ERGOX_KV_NAME }}
+  TF_VAR_cloudflare_zone_name: ergosum.in
+  TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ERGOSUM_IN_ZONE_ID }}
+  TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: true
+
 jobs:
-  terraform:
-    name: Deploy LicenX (${{ inputs.stage }})
+  prepare:
+    name: Resolve Release Metadata
     runs-on: ubuntu-latest
     outputs:
       checkout_ref: ${{ steps.resolve_release.outputs.checkout_ref }}
       release_tag: ${{ steps.resolve_release.outputs.release_tag }}
-    env:
-      LICENX_SUBMODULE_PATH: ergox/licenx
-      LICENX_IMAGE_REPOSITORY_NAME: licenxsrv
-      TERRAFORM_STATE_ACCOUNT: ergoxbuild
-      TERRAFORM_STATE_CONTAINER: terraform
-      TF_IN_AUTOMATION: true
-      TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      TF_VAR_resource_group_name: ${{ secrets.ERGOX_RG_NAME }}
-      TF_VAR_location: westeurope
-      TF_VAR_managed_environment_name: ergox
-      TF_VAR_container_registry_name: ${{ secrets.ERGOX_ACR_NAME }}
-      TF_VAR_stage: ${{ inputs.stage }}
-      TF_VAR_key_vault_name: ${{ secrets.ERGOX_KV_NAME }}
-      TF_VAR_cloudflare_zone_name: ergosum.in
-      TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ERGOSUM_IN_ZONE_ID }}
-      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      ARM_USE_OIDC: true
+      release_url: ${{ steps.resolve_release.outputs.release_url }}
+      docker_tag: ${{ steps.resolve_release.outputs.docker_tag }}
     steps:
-      - name: Checkout workflow repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: false
-
-      - name: Prepare LicenX workspace
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $moduleDir = Join-Path $Env:GITHUB_WORKSPACE '.git/modules' $Env:LICENX_SUBMODULE_PATH
-          if (Test-Path $moduleDir) {
-            Remove-Item $moduleDir -Recurse -Force
-          }
-          $submodulePath = Join-Path $Env:GITHUB_WORKSPACE $Env:LICENX_SUBMODULE_PATH
-          if (Test-Path $submodulePath) {
-            Remove-Item $submodulePath -Recurse -Force
-          }
-
       - name: Resolve LicenX release metadata
         id: resolve_release
         uses: actions/github-script@v7
@@ -82,8 +65,8 @@ jobs:
             const owner = 'ergosumx';
             const repo = 'licenx';
             const inputs = context.payload.inputs ?? {};
-            const releaseTagInput = (inputs['licenx-release-tag'] || '').trim();
-            const overrideImageTag = (inputs['container-image-tag'] || '').trim();
+            const releaseTagInput = (inputs['licenx_release_tag'] || '').trim();
+            const overrideImageTag = (inputs['container_image_tag'] || '').trim();
 
             let releaseTag = releaseTagInput;
             let checkoutRef = releaseTagInput;
@@ -129,14 +112,39 @@ jobs:
             core.setOutput('checkout_ref', checkoutRef);
             core.setOutput('release_url', releaseUrl);
             core.setOutput('docker_tag', dockerTag);
-            core.setOutput('docker_tag_candidate', dockerTagCandidate);
+
+  deploy_dev:
+    name: Deploy Dev
+    runs-on: ubuntu-latest
+    needs: prepare
+    env:
+      DEPLOY_STAGE: dev
+    steps: &deploy_stage_steps
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Prepare LicenX workspace
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $moduleDir = Join-Path $Env:GITHUB_WORKSPACE '.git/modules' $Env:LICENX_SUBMODULE_PATH
+          if (Test-Path $moduleDir) {
+            Remove-Item $moduleDir -Recurse -Force
+          }
+          $submodulePath = Join-Path $Env:GITHUB_WORKSPACE $Env:LICENX_SUBMODULE_PATH
+          if (Test-Path $submodulePath) {
+            Remove-Item $submodulePath -Recurse -Force
+          }
 
       - name: Export release environment
         shell: pwsh
         env:
-          RESOLVED_RELEASE_TAG: ${{ steps.resolve_release.outputs.release_tag }}
-          RESOLVED_RELEASE_URL: ${{ steps.resolve_release.outputs.release_url }}
-          RESOLVED_DOCKER_TAG: ${{ steps.resolve_release.outputs.docker_tag }}
+          RESOLVED_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RESOLVED_RELEASE_URL: ${{ needs.prepare.outputs.release_url }}
+          RESOLVED_DOCKER_TAG: ${{ needs.prepare.outputs.docker_tag }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ([string]::IsNullOrWhiteSpace($Env:RESOLVED_RELEASE_TAG)) {
@@ -153,7 +161,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ergosumx/licenx
-          ref: ${{ steps.resolve_release.outputs.checkout_ref }}
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
           path: ${{ env.LICENX_SUBMODULE_PATH }}
           fetch-depth: 0
           submodules: recursive
@@ -162,16 +170,20 @@ jobs:
       - name: Configure stage settings
         shell: pwsh
         env:
-          STAGE: ${{ inputs.stage }}
+          STAGE: ${{ env.DEPLOY_STAGE }}
           ACR_ENDPOINT: ${{ secrets.ERGOX_ACR_ENDPOINT }}
           IMAGE_NAME: ${{ env.LICENX_IMAGE_REPOSITORY_NAME }}
         run: |
           $ErrorActionPreference = 'Stop'
           $stage = $Env:STAGE
-          if ($stage -notin @('dev', 'prod')) {
+          if ($stage -notin @('dev', 'test', 'prod')) {
             throw "Unsupported stage '$stage'."
           }
-          $containerAppName = if ($stage -eq 'prod') { 'licenx-prod' } else { 'licenx-dev' }
+          $containerAppName = switch ($stage) {
+            'prod' { 'licenx-prod' }
+            'test' { 'licenx-test' }
+            Default { 'licenx-dev' }
+          }
           $endpoint = $Env:ACR_ENDPOINT
           if ([string]::IsNullOrWhiteSpace($endpoint)) {
             throw 'ERGOX_ACR_ENDPOINT secret is required.'
@@ -186,6 +198,7 @@ jobs:
           $endpoint = $endpoint.TrimEnd('/')
           $imageName = if ([string]::IsNullOrWhiteSpace($Env:IMAGE_NAME)) { 'licenxsrv' } else { $Env:IMAGE_NAME.Trim() }
           $containerImage = "$endpoint/$imageName"
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_stage=$stage"
           Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_container_app_name=$containerAppName"
           Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_container_image=$containerImage"
 
@@ -220,7 +233,7 @@ jobs:
             -backend-config="resource_group_name=${{ secrets.ERGOX_RG_NAME }}" \
             -backend-config="storage_account_name=${{ env.TERRAFORM_STATE_ACCOUNT }}" \
             -backend-config="container_name=${{ env.TERRAFORM_STATE_CONTAINER }}" \
-            -backend-config="key=${{ inputs.stage }}/licenx/terraform.tfstate"
+            -backend-config="key=${{ env.DEPLOY_STAGE }}/licenx/terraform.tfstate"
 
       - name: Terraform plan
         id: terraform_plan
@@ -235,33 +248,154 @@ jobs:
         if: ${{ !inputs.apply && success() }}
         uses: actions/upload-artifact@v4
         with:
-          name: licenx-tfplan-${{ inputs.stage }}
+          name: licenx-tfplan-${{ env.DEPLOY_STAGE }}
           path: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy/tfplan
           if-no-files-found: warn
 
       - name: Terraform apply
         if: ${{ inputs.apply }}
         working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
-        run: terraform apply -input=false -auto-approve tfplan
+        run: terraform apply -input=false -auto-approve
 
-  validate-dev:
-    name: Validate Dev Simulation
+  validate_simulation:
+    name: Validate Simulation Tests
     runs-on: windows-latest
-    needs: terraform
-    if: ${{ needs.terraform.result == 'success' && inputs.stage == 'dev' && inputs.apply }}
+    needs:
+      - deploy_dev
+      - prepare
+    if: ${{ needs.deploy_dev.result == 'success' && inputs.apply }}
     env:
       ERGOX_LICENX_DEV_OVERRIDE: licenx.dev.override.confirmed
+      LICENX_KEY_VAULT_NAME: ${{ secrets.ERGOX_KV_NAME }}
+      LICENX_VALIDATION_STAGE: dev
     steps:
       - name: Checkout LicenX source
         uses: actions/checkout@v4
         with:
           repository: ergosumx/licenx
-          ref: ${{ needs.terraform.outputs.checkout_ref }}
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
           fetch-depth: 0
           submodules: recursive
           token: ${{ secrets.ERGOX_SUBMODULE_TOKEN }}
 
-      - name: Restore simulation leases
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Provision signing assets from Key Vault
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Get-SecretValue {
+            param(
+              [string[]]$Names
+            )
+
+            foreach ($candidate in $Names) {
+              if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+              try {
+                $value = & az keyvault secret show --vault-name $Env:LICENX_KEY_VAULT_NAME --name $candidate --query value -o tsv --only-show-errors
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Host "Secret '$candidate' lookup returned exit code $LASTEXITCODE." -ForegroundColor Yellow
+                  continue
+                }
+
+                $normalized = ($value | Out-String).Trim()
+                if (-not [string]::IsNullOrWhiteSpace($normalized)) {
+                  Write-Host "Retrieved secret '$candidate'."
+                  return $normalized
+                }
+
+                Write-Host "Secret '$candidate' was empty; trying next candidate." -ForegroundColor Yellow
+              }
+              catch {
+                Write-Host "Secret '$candidate' not found; trying next candidate." -ForegroundColor Yellow
+              }
+            }
+
+            throw "Failed to retrieve any of the candidate secrets: $($Names -join ', ')"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($Env:LICENX_KEY_VAULT_NAME)) {
+            throw 'LICENX_KEY_VAULT_NAME is not configured.'
+          }
+
+          $stage = if ([string]::IsNullOrWhiteSpace($Env:LICENX_VALIDATION_STAGE)) { 'dev' } else { $Env:LICENX_VALIDATION_STAGE.Trim().ToLowerInvariant() }
+          $certRoot = Join-Path $PWD (Join-Path '.certs' $stage)
+          if (-not (Test-Path $certRoot)) {
+            New-Item -ItemType Directory -Path $certRoot -Force | Out-Null
+          }
+
+          $privateCandidates = @(
+            "$stage-ergox-licenx-private-key",
+            "$stage`_ergox_licenx_private_key",
+            "licenx-$stage-id-ed25519-private",
+            "$stage-licenx-id-ed25519-private"
+          )
+
+          $publicCandidates = @(
+            "$stage-ergox-licenx-public-key",
+            "$stage`_ergox_licenx_public_key",
+            "licenx-$stage-id-ed25519-public",
+            "$stage-licenx-id-ed25519-public"
+          )
+
+          $privateValue = Get-SecretValue -Names $privateCandidates
+          $publicValue = Get-SecretValue -Names $publicCandidates
+
+          $privateFile = Join-Path $certRoot 'licenx_private.b64'
+          $publicFile = Join-Path $certRoot 'licenx_public.b64'
+          Set-Content -LiteralPath $privateFile -Value ($privateValue + "`n") -Encoding ASCII
+          Set-Content -LiteralPath $publicFile -Value ($publicValue + "`n") -Encoding ASCII
+
+          $privateBytes = [Convert]::FromBase64String($privateValue)
+          if ($privateBytes.Length -ne 64) {
+            throw "Private key secret decoded to unexpected length ($($privateBytes.Length) bytes)."
+          }
+
+          $hexPayload = -join ($privateBytes | ForEach-Object { $_.ToString('X2') })
+          Set-Content -LiteralPath (Join-Path $certRoot 'id_ed25519.private.hex') -Value ($hexPayload + "`n") -Encoding ASCII
+
+          $seedBytes = $privateBytes[0..31]
+          $seedHex = -join ($seedBytes | ForEach-Object { $_.ToString('X2') })
+          Set-Content -LiteralPath (Join-Path $certRoot 'id_ed25519.seed.hex') -Value ($seedHex + "`n") -Encoding ASCII
+
+          Write-Host "Key material written under $certRoot."
+
+      - name: Verify key artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = if ([string]::IsNullOrWhiteSpace($Env:LICENX_VALIDATION_STAGE)) { 'dev' } else { $Env:LICENX_VALIDATION_STAGE.Trim().ToLowerInvariant() }
+          $certRoot = Join-Path $PWD (Join-Path '.certs' $stage)
+          $hexPath = Join-Path $certRoot 'id_ed25519.private.hex'
+          if (-not (Test-Path $hexPath)) {
+            throw "Private hex material missing at $hexPath"
+          }
+          $hex = (Get-Content -LiteralPath $hexPath -Raw).Trim()
+          if ($hex.Length -ne 128) {
+            throw "Private hex material should be 128 characters but measured $($hex.Length)."
+          }
+
+      - name: Build binaries and prepare simulation sandboxes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setupScript = Join-Path $PWD 'simulation_tests/scripts/setup.ps1'
+          if (-not (Test-Path $setupScript)) {
+            throw "Missing setup script at $setupScript"
+          }
+          $privateKeyPath = Join-Path $PWD '.certs/dev/id_ed25519.private.hex'
+          if (-not (Test-Path $privateKeyPath)) {
+            throw "Private key material not found at $privateKeyPath"
+          }
+          & $setupScript -PrivateKeyPath $privateKeyPath
+
+      - name: Reset simulation outputs
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -270,18 +404,18 @@ jobs:
             Get-ChildItem -Path $resultsPath -File -ErrorAction SilentlyContinue | Remove-Item -Force
             Get-ChildItem -Path $resultsPath -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
           }
-          Get-ChildItem -Path "simulation_tests/apps" -Directory | ForEach-Object {
+          Get-ChildItem -Path 'simulation_tests/apps' -Directory | ForEach-Object {
             Get-ChildItem -Path $_.FullName -Filter '*.licenx.leased' -File -ErrorAction SilentlyContinue | Remove-Item -Force
           }
 
-      - name: Run simulation validation
+      - name: Execute simulation harness
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $script = Join-Path $PWD 'simulation_tests/scripts/run-all.ps1'
           & $script -EnableDevOverride -ResetLeases -Cycles 3
 
-      - name: Check simulation results
+      - name: Summarize simulation output
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -293,10 +427,43 @@ jobs:
           if (-not $summary) {
             throw 'Simulation summary is empty.'
           }
-          $failed = @($summary | Where-Object { $_.failures -gt 0 })
-          if ($failed.Count -gt 0) {
-            Write-Host 'Simulation failures detected:'
-            $failed | ConvertTo-Json -Depth 4
-            throw "Simulation validation failed for $($failed.Count) scenarios."
-          }
-          Write-Host 'Simulation validation succeeded.'
+          ($summary | Sort-Object name) | ConvertTo-Json -Depth 3
+
+      - name: Validate simulation summary against success criteria
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $validator = Join-Path $PWD 'simulation_tests/scripts/validate-summary.ps1'
+          & $validator -SummaryPath (Join-Path $PWD 'simulation_tests/results/summary.json')
+
+      - name: Upload simulation artefacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulation-results
+          path: simulation_tests/results
+          if-no-files-found: warn
+
+  deploy_test:
+    name: Deploy Test
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - deploy_dev
+      - validate_simulation
+    if: ${{ needs.deploy_dev.result == 'success' && needs.validate_simulation.result == 'success' && inputs.apply && inputs.dev_only == false }}
+    env:
+      DEPLOY_STAGE: test
+    steps: *deploy_stage_steps
+
+  deploy_prod:
+    name: Deploy Prod
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - deploy_test
+      - validate_simulation
+    if: ${{ needs.deploy_test.result == 'success' && needs.validate_simulation.result == 'success' && inputs.apply && inputs.dev_only == false && inputs.promote_prod }}
+    env:
+      DEPLOY_STAGE: prod
+    steps: *deploy_stage_steps
