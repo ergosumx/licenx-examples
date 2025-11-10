@@ -176,12 +176,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $stage = $Env:STAGE
-          if ($stage -notin @('dev', 'test', 'prod')) {
+          if ($stage -notin @('dev', 'prod')) {
             throw "Unsupported stage '$stage'."
           }
           $containerAppName = switch ($stage) {
             'prod' { 'licenx-prod' }
-            'test' { 'licenx-test' }
             Default { 'licenx-dev' }
           }
           $endpoint = $Env:ACR_ENDPOINT
@@ -464,26 +463,14 @@ jobs:
           path: simulation_tests/results
           if-no-files-found: warn
 
-  deploy_test:
-    name: Deploy Test
-    runs-on: ubuntu-latest
-    needs:
-      - prepare
-      - deploy_dev
-      - validate_simulation
-    if: ${{ needs.deploy_dev.result == 'success' && needs.validate_simulation.result == 'success' && inputs.apply && inputs.dev_only == false }}
-    env:
-      DEPLOY_STAGE: test
-    steps: *deploy_stage_steps
-
   deploy_prod:
     name: Deploy Prod
     runs-on: ubuntu-latest
     needs:
       - prepare
-      - deploy_test
+      - deploy_dev
       - validate_simulation
-    if: ${{ needs.deploy_test.result == 'success' && needs.validate_simulation.result == 'success' && inputs.apply && inputs.dev_only == false && inputs.promote_prod }}
+    if: ${{ needs.deploy_dev.result == 'success' && needs.validate_simulation.result == 'success' && inputs.apply && inputs.dev_only == false && inputs.promote_prod }}
     env:
       DEPLOY_STAGE: prod
     steps: *deploy_stage_steps
