@@ -116,7 +116,7 @@ jobs:
     needs: prepare
     env:
       DEPLOY_STAGE: dev
-    steps: &deploy_stage_steps
+    steps:
       - name: Checkout workflow repository
         uses: actions/checkout@v4
         with:
@@ -241,7 +241,6 @@ jobs:
         run: terraform show -no-color tfplan
 
       - name: Upload Terraform plan
-        if: ${{ !inputs.apply && success() }}
         uses: actions/upload-artifact@v4
         with:
           name: licenx-tfplan-${{ env.DEPLOY_STAGE }}
@@ -249,7 +248,6 @@ jobs:
           if-no-files-found: warn
 
       - name: Terraform apply
-        if: ${{ inputs.apply || (env.DEPLOY_STAGE == 'dev') }}
         working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
         run: terraform apply -input=false -auto-approve
 
@@ -460,14 +458,278 @@ jobs:
           path: simulation_tests/results
           if-no-files-found: warn
 
-  deploy_prod:
-    name: Deploy Prod
+  plan_prod:
+    name: Plan Prod
     runs-on: ubuntu-latest
     needs:
       - prepare
       - deploy_dev
       - validate_simulation
-    if: ${{ needs.deploy_dev.result == 'success' && needs.validate_simulation.result == 'success' && inputs.apply && inputs.dev_only == false }}
+    if: ${{ needs.deploy_dev.result == 'success' && needs.validate_simulation.result == 'success' && inputs.dev_only == false }}
     env:
       DEPLOY_STAGE: prod
-    steps: *deploy_stage_steps
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Prepare LicenX workspace
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $moduleDir = Join-Path $Env:GITHUB_WORKSPACE '.git/modules' $Env:LICENX_SUBMODULE_PATH
+          if (Test-Path $moduleDir) {
+            Remove-Item $moduleDir -Recurse -Force
+          }
+          $submodulePath = Join-Path $Env:GITHUB_WORKSPACE $Env:LICENX_SUBMODULE_PATH
+          if (Test-Path $submodulePath) {
+            Remove-Item $submodulePath -Recurse -Force
+          }
+
+      - name: Export release environment
+        shell: pwsh
+        env:
+          RESOLVED_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RESOLVED_RELEASE_URL: ${{ needs.prepare.outputs.release_url }}
+          RESOLVED_DOCKER_TAG: ${{ needs.prepare.outputs.docker_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($Env:RESOLVED_RELEASE_TAG)) {
+            throw 'Release tag resolution failed.'
+          }
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "LICENX_RELEASE_TAG=$($Env:RESOLVED_RELEASE_TAG)"
+          if (-not [string]::IsNullOrWhiteSpace($Env:RESOLVED_RELEASE_URL)) {
+            Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "LICENX_RELEASE_URL=$($Env:RESOLVED_RELEASE_URL)"
+          }
+          $dockerTag = if ([string]::IsNullOrWhiteSpace($Env:RESOLVED_DOCKER_TAG)) { 'latest' } else { $Env:RESOLVED_DOCKER_TAG }
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_container_image_tag=$dockerTag"
+
+      - name: Checkout LicenX source
+        uses: actions/checkout@v4
+        with:
+          repository: ergosumx/licenx
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+          path: ${{ env.LICENX_SUBMODULE_PATH }}
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.ERGOX_SUBMODULE_TOKEN }}
+
+      - name: Configure stage settings
+        shell: pwsh
+        env:
+          STAGE: ${{ env.DEPLOY_STAGE }}
+          ACR_ENDPOINT: ${{ secrets.ERGOX_ACR_ENDPOINT }}
+          IMAGE_NAME: ${{ env.LICENX_IMAGE_REPOSITORY_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = $Env:STAGE
+          if ($stage -notin @('dev', 'prod')) {
+            throw "Unsupported stage '$stage'."
+          }
+          $containerAppName = switch ($stage) {
+            'prod' { 'licenx-prod' }
+            Default { 'licenx-dev' }
+          }
+          $endpoint = $Env:ACR_ENDPOINT
+          if ([string]::IsNullOrWhiteSpace($endpoint)) {
+            throw 'ERGOX_ACR_ENDPOINT secret is required.'
+          }
+          $endpoint = $endpoint.Trim()
+          if ($endpoint.StartsWith('https://')) {
+            $endpoint = $endpoint.Substring(8)
+          }
+          if ($endpoint.StartsWith('http://')) {
+            $endpoint = $endpoint.Substring(7)
+          }
+          $endpoint = $endpoint.TrimEnd('/')
+          $imageName = if ([string]::IsNullOrWhiteSpace($Env:IMAGE_NAME)) { 'licenxsrv' } else { $Env:IMAGE_NAME.Trim() }
+          $containerImage = "$endpoint/$imageName"
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_stage=$stage"
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_container_app_name=$containerAppName"
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_container_image=$containerImage"
+
+      - name: Summarize deployment inputs
+        shell: pwsh
+        run: |
+          Write-Host "Stage            : $Env:TF_VAR_stage"
+          Write-Host "Release tag      : $Env:LICENX_RELEASE_TAG"
+          if ($Env:LICENX_RELEASE_URL) {
+            Write-Host "Release URL      : $Env:LICENX_RELEASE_URL"
+          }
+          Write-Host "Container app    : $Env:TF_VAR_container_app_name"
+          Write-Host "Image repository : $Env:TF_VAR_container_image"
+          Write-Host "Image tag        : $Env:TF_VAR_container_image_tag"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform init
+        working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.ERGOX_RG_NAME }}" \
+            -backend-config="storage_account_name=${{ env.TERRAFORM_STATE_ACCOUNT }}" \
+            -backend-config="container_name=${{ env.TERRAFORM_STATE_CONTAINER }}" \
+            -backend-config="key=${{ env.DEPLOY_STAGE }}/licenx/terraform.tfstate"
+
+      - name: Terraform plan
+        id: terraform_plan_prod
+        working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Show Terraform plan
+        working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
+        run: terraform show -no-color tfplan
+
+      - name: Upload Terraform plan
+        if: ${{ !inputs.apply && success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: licenx-tfplan-${{ env.DEPLOY_STAGE }}
+          path: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy/tfplan
+          if-no-files-found: warn
+
+  deploy_prod:
+    name: Deploy Prod
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - plan_prod
+    if: ${{ needs.plan_prod.result == 'success' && inputs.apply }}
+    env:
+      DEPLOY_STAGE: prod
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Prepare LicenX workspace
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $moduleDir = Join-Path $Env:GITHUB_WORKSPACE '.git/modules' $Env:LICENX_SUBMODULE_PATH
+          if (Test-Path $moduleDir) {
+            Remove-Item $moduleDir -Recurse -Force
+          }
+          $submodulePath = Join-Path $Env:GITHUB_WORKSPACE $Env:LICENX_SUBMODULE_PATH
+          if (Test-Path $submodulePath) {
+            Remove-Item $submodulePath -Recurse -Force
+          }
+
+      - name: Export release environment
+        shell: pwsh
+        env:
+          RESOLVED_RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RESOLVED_RELEASE_URL: ${{ needs.prepare.outputs.release_url }}
+          RESOLVED_DOCKER_TAG: ${{ needs.prepare.outputs.docker_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($Env:RESOLVED_RELEASE_TAG)) {
+            throw 'Release tag resolution failed.'
+          }
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "LICENX_RELEASE_TAG=$($Env:RESOLVED_RELEASE_TAG)"
+          if (-not [string]::IsNullOrWhiteSpace($Env:RESOLVED_RELEASE_URL)) {
+            Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "LICENX_RELEASE_URL=$($Env:RESOLVED_RELEASE_URL)"
+          }
+          $dockerTag = if ([string]::IsNullOrWhiteSpace($Env:RESOLVED_DOCKER_TAG)) { 'latest' } else { $Env:RESOLVED_DOCKER_TAG }
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_container_image_tag=$dockerTag"
+
+      - name: Checkout LicenX source
+        uses: actions/checkout@v4
+        with:
+          repository: ergosumx/licenx
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+          path: ${{ env.LICENX_SUBMODULE_PATH }}
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.ERGOX_SUBMODULE_TOKEN }}
+
+      - name: Configure stage settings
+        shell: pwsh
+        env:
+          STAGE: ${{ env.DEPLOY_STAGE }}
+          ACR_ENDPOINT: ${{ secrets.ERGOX_ACR_ENDPOINT }}
+          IMAGE_NAME: ${{ env.LICENX_IMAGE_REPOSITORY_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = $Env:STAGE
+          if ($stage -notin @('dev', 'prod')) {
+            throw "Unsupported stage '$stage'."
+          }
+          $containerAppName = switch ($stage) {
+            'prod' { 'licenx-prod' }
+            Default { 'licenx-dev' }
+          }
+          $endpoint = $Env:ACR_ENDPOINT
+          if ([string]::IsNullOrWhiteSpace($endpoint)) {
+            throw 'ERGOX_ACR_ENDPOINT secret is required.'
+          }
+          $endpoint = $endpoint.Trim()
+          if ($endpoint.StartsWith('https://')) {
+            $endpoint = $endpoint.Substring(8)
+          }
+          if ($endpoint.StartsWith('http://')) {
+            $endpoint = $endpoint.Substring(7)
+          }
+          $endpoint = $endpoint.TrimEnd('/')
+          $imageName = if ([string]::IsNullOrWhiteSpace($Env:IMAGE_NAME)) { 'licenxsrv' } else { $Env:IMAGE_NAME.Trim() }
+          $containerImage = "$endpoint/$imageName"
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_stage=$stage"
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_container_app_name=$containerAppName"
+          Add-Content -Encoding utf8 -Path $Env:GITHUB_ENV -Value "TF_VAR_container_image=$containerImage"
+
+      - name: Summarize deployment inputs
+        shell: pwsh
+        run: |
+          Write-Host "Stage            : $Env:TF_VAR_stage"
+          Write-Host "Release tag      : $Env:LICENX_RELEASE_TAG"
+          if ($Env:LICENX_RELEASE_URL) {
+            Write-Host "Release URL      : $Env:LICENX_RELEASE_URL"
+          }
+          Write-Host "Container app    : $Env:TF_VAR_container_app_name"
+          Write-Host "Image repository : $Env:TF_VAR_container_image"
+          Write-Host "Image tag        : $Env:TF_VAR_container_image_tag"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform init
+        working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.ERGOX_RG_NAME }}" \
+            -backend-config="storage_account_name=${{ env.TERRAFORM_STATE_ACCOUNT }}" \
+            -backend-config="container_name=${{ env.TERRAFORM_STATE_CONTAINER }}" \
+            -backend-config="key=${{ env.DEPLOY_STAGE }}/licenx/terraform.tfstate"
+
+      - name: Download Terraform plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: licenx-tfplan-${{ env.DEPLOY_STAGE }}
+          path: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
+
+      - name: Terraform apply
+        working-directory: ${{ env.LICENX_SUBMODULE_PATH }}/.deploy
+        run: terraform apply -input=false -auto-approve tfplan
